@@ -1,0 +1,19 @@
+headerbar {
+  min-height: 0px;
+  padding:0px;
+  margin: 0px;
+}
+headerbar button {
+  padding:0px;
+  margin: 0px;
+}
+tabbar {
+  margin: 0px;
+  padding:0px;
+  min-height: 0px;
+}
+
+tabbar tabbox {
+  padding: 0px;
+  margin: 0px;
+}

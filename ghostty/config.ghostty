@@ -1,0 +1,35 @@
+window-decoration = client
+#gtk-titlebar = false
+#gtk-titlebar-style=native
+#gtk-toolbar-style=raised
+gtk-tabs-location=top
+gtk-wide-tabs=false
+gtk-toolbar-style=flat
+gtk-custom-css = ~/.config/ghostty/style.css
+
+# ===== TAB =====
+# 新建 tab
+keybind = ctrl+shift+t=new_tab
+# 关闭 tab（推荐 close_surface）
+keybind = ctrl+shift+w=close_surface
+
+# ===== SPLIT =====
+# 垂直分割（左右）
+keybind = ctrl+shift+9=new_split:right
+# 水平分割（上下）
+keybind = ctrl+shift+0=new_split:down
+
+
+# ===== FONT =====
+#font-family = "Hack Nerd Font Mono"
+font-size = 10
+#adjust-cell-width = 8%
+#adjust-cell-height = -10%
+
+
+# ===== PADDING =====
+window-padding-x = 8
+window-padding-y = 8
+
+
+cursor-click-to-move = true
