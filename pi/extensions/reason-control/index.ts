@@ -14,7 +14,8 @@ const REASONING_OPTIONS = [
   { value: "low", description: "Low reasoning effort" },
   { value: "medium", description: "Balanced reasoning" },
   { value: "high", description: "High reasoning effort" },
-  { value: "xhigh", description: "Maximum reasoning — best for complex problems" },
+  { value: "xhigh", description: "Extra-high reasoning effort — great for complex problems" },
+  { value: "max", description: "Maximum reasoning — best for the hardest problems" },
 ] as const;
 
 type ReasoningLevel = (typeof REASONING_OPTIONS)[number]["value"];
