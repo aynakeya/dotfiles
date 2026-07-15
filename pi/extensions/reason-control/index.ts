@@ -1,5 +1,11 @@
 import { getSupportedThinkingLevels as getSupportedReasoningLevels, type Api, type Model } from "@earendil-works/pi-ai";
-import { DynamicBorder, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+  DynamicBorder,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  getAgentDir,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import {
   Container,
   SelectList,
@@ -24,22 +30,23 @@ type ReasoningOption = (typeof REASONING_OPTIONS)[number];
 const REASONING_LEVELS = REASONING_OPTIONS.map((option) => option.value);
 const REASONING_LEVEL_SET = new Set<string>(REASONING_LEVELS);
 const REASONING_USAGE = `/reasoning <${REASONING_LEVELS.join("|")}>`;
+const REASONING_DEFAULT_USAGE = `/reasoning-default <${REASONING_LEVELS.join("|")}>`;
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("reasoning", {
-    description: "Select reasoning level. Use /reasoning <level> to set directly.",
+    description: "Set reasoning for the current session without changing the global default.",
     getArgumentCompletions,
     handler: async (args, ctx) => {
       const argument = args.trim();
 
       if (argument) {
-        const parsed = parseReasoningLevel(argument);
+        const parsed = parseReasoningLevel(argument, REASONING_USAGE);
         if (parsed.error) {
           ctx.ui.notify(parsed.error, "warning");
           return;
         }
 
-        setReasoningLevel(pi, ctx, parsed.level);
+        setSessionReasoningLevel(pi, ctx, parsed.level);
         return;
       }
 
@@ -49,8 +56,54 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const selected = await showReasoningSelector(ctx, pi.getThinkingLevel(), getAvailableOptions(ctx.model));
-      if (selected !== null) setReasoningLevel(pi, ctx, selected);
+      const selected = await showReasoningSelector(
+        ctx,
+        pi.getThinkingLevel(),
+        getAvailableOptions(ctx.model),
+        "Select Session Reasoning Level",
+      );
+      if (selected !== null) setSessionReasoningLevel(pi, ctx, selected);
+    },
+  });
+
+  pi.registerCommand("reasoning-default", {
+    description: "Set reasoning for the current session and make it the global default.",
+    getArgumentCompletions,
+    handler: async (args, ctx) => {
+      const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
+        projectTrusted: ctx.isProjectTrusted(),
+      });
+      const loadErrors = settings.drainErrors();
+      if (loadErrors.length > 0) {
+        ctx.ui.notify(formatSettingsErrors("Could not load settings", loadErrors), "error");
+        return;
+      }
+
+      const argument = args.trim();
+      if (argument) {
+        const parsed = parseReasoningLevel(argument, REASONING_DEFAULT_USAGE);
+        if (parsed.error) {
+          ctx.ui.notify(parsed.error, "warning");
+          return;
+        }
+
+        await setDefaultReasoningLevel(pi, settings, ctx, parsed.level);
+        return;
+      }
+
+      if (ctx.mode !== "tui") {
+        const levels = getAvailableOptions(ctx.model).map((option) => option.value).join(", ");
+        ctx.ui.notify(`Use ${REASONING_DEFAULT_USAGE}. Available for current model: ${levels}`, "info");
+        return;
+      }
+
+      const selected = await showReasoningSelector(
+        ctx,
+        pi.getThinkingLevel(),
+        getAvailableOptions(ctx.model),
+        "Select Session + Default Reasoning Level",
+      );
+      if (selected !== null) await setDefaultReasoningLevel(pi, settings, ctx, selected);
     },
   });
 }
@@ -68,13 +121,16 @@ function getArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | nu
   }));
 }
 
-function parseReasoningLevel(input: string): { level: ReasoningLevel; error?: undefined } | { level?: undefined; error: string } {
+function parseReasoningLevel(
+  input: string,
+  usage: string,
+): { level: ReasoningLevel; error?: undefined } | { level?: undefined; error: string } {
   const parts = input.split(/\s+/);
-  if (parts.length !== 1) return { error: `Usage: ${REASONING_USAGE}` };
+  if (parts.length !== 1) return { error: `Usage: ${usage}` };
 
   const level = parts[0].toLowerCase();
   if (!isReasoningLevel(level)) {
-    return { error: `Invalid reasoning level: "${parts[0]}". Use: ${REASONING_USAGE}` };
+    return { error: `Invalid reasoning level: "${parts[0]}". Use: ${usage}` };
   }
 
   return { level };
@@ -84,6 +140,7 @@ async function showReasoningSelector(
   ctx: ExtensionCommandContext,
   current: ReasoningLevel,
   options: ReasoningOption[],
+  title: string,
 ): Promise<ReasoningLevel | null> {
   const items: SelectItem[] = options.map((option) => ({
     value: option.value,
@@ -108,7 +165,7 @@ async function showReasoningSelector(
     selectList.onCancel = () => done(null);
 
     container.addChild(new DynamicBorder((text) => theme.fg("accent", text)));
-    container.addChild(new Text(theme.fg("accent", theme.bold("Select Reasoning Level")), 0, 0));
+    container.addChild(new Text(theme.fg("accent", theme.bold(title)), 0, 0));
     container.addChild(new Text(theme.fg("dim", `Current: ${current}`), 0, 0));
     container.addChild(new Text("", 0, 0));
     container.addChild(selectList);
@@ -127,19 +184,63 @@ async function showReasoningSelector(
   });
 }
 
-function setReasoningLevel(pi: ExtensionAPI, ctx: ExtensionCommandContext, requested: ReasoningLevel) {
-  pi.setThinkingLevel(requested);
+function setSessionReasoningLevel(pi: ExtensionAPI, ctx: ExtensionCommandContext, requested: ReasoningLevel) {
+  const actual = applySessionReasoningLevel(pi, requested);
 
-  const actual = pi.getThinkingLevel();
   if (actual === requested) {
-    ctx.ui.notify(`Reasoning level: ${actual}`, "info");
+    ctx.ui.notify(`Session reasoning level: ${actual}`, "info");
     return;
   }
 
   ctx.ui.notify(
-    `Reasoning level set to ${actual}; requested ${requested} is not supported by the current model.`,
+    `Session reasoning level set to ${actual}; requested ${requested} is not supported by the current model.`,
     "warning",
   );
+}
+
+async function setDefaultReasoningLevel(
+  pi: ExtensionAPI,
+  settings: SettingsManager,
+  ctx: ExtensionCommandContext,
+  requested: ReasoningLevel,
+): Promise<void> {
+  const actual = applySessionReasoningLevel(pi, requested);
+  settings.setDefaultThinkingLevel(actual);
+  await settings.flush();
+
+  const errors = settings.drainErrors();
+  if (errors.length > 0) {
+    ctx.ui.notify(formatSettingsErrors("Session reasoning changed, but the default could not be saved", errors), "error");
+    return;
+  }
+
+  if (actual === requested) {
+    ctx.ui.notify(`Session and default reasoning level: ${actual}`, "info");
+    return;
+  }
+
+  ctx.ui.notify(
+    `Session and default reasoning level set to ${actual}; requested ${requested} is not supported by the current model.`,
+    "warning",
+  );
+}
+
+function applySessionReasoningLevel(pi: ExtensionAPI, requested: ReasoningLevel): ReasoningLevel {
+  // Pi persists setThinkingLevel() to global settings by design. Suppress only
+  // that write so the session entry is still recorded and can be resumed.
+  const prototype = SettingsManager.prototype;
+  const original = prototype.setDefaultThinkingLevel;
+  prototype.setDefaultThinkingLevel = function (_level: Parameters<typeof original>[0]): void {};
+  try {
+    pi.setThinkingLevel(requested);
+  } finally {
+    prototype.setDefaultThinkingLevel = original;
+  }
+  return pi.getThinkingLevel();
+}
+
+function formatSettingsErrors(prefix: string, errors: Array<{ error: Error }>): string {
+  return `${prefix}: ${errors.map(({ error }) => error.message).join("; ")}`;
 }
 
 function getAvailableOptions(model: Model<Api> | undefined): ReasoningOption[] {

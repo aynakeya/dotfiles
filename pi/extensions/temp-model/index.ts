@@ -112,7 +112,9 @@ async function suppressDefaultModelPersistence<T>(fn: () => Promise<T>): Promise
 		originalSetDefaultModelAndProvider = proto.setDefaultModelAndProvider;
 		originalSetDefaultThinkingLevel = proto.setDefaultThinkingLevel;
 		proto.setDefaultModelAndProvider = function (_provider: string, _modelId: string): void {};
-		proto.setDefaultThinkingLevel = function (_level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): void {};
+		proto.setDefaultThinkingLevel = function (
+			_level: Parameters<SettingsManagerPrototype["setDefaultThinkingLevel"]>[0],
+		): void {};
 	}
 
 	suppressDepth += 1;
