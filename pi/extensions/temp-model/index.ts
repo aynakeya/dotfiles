@@ -11,8 +11,8 @@ let originalSetDefaultThinkingLevel: SettingsManagerPrototype["setDefaultThinkin
 export default function tempModelExtension(pi: ExtensionAPI) {
 	let completionValues: string[] = [];
 
-	pi.on("session_start", (_event, ctx) => {
-		completionValues = listAvailableModels(ctx).map(formatModelRef);
+	pi.on("session_start", async (_event, ctx) => {
+		completionValues = (await listAvailableModels(ctx)).map(formatModelRef);
 	});
 
 	pi.registerCommand("tmodel", {
@@ -27,9 +27,7 @@ export default function tempModelExtension(pi: ExtensionAPI) {
 				: null;
 		},
 		handler: async (args, ctx) => {
-			await ctx.waitForIdle();
-
-			const models = listAvailableModels(ctx);
+			const models = await listAvailableModels(ctx);
 			completionValues = models.map(formatModelRef);
 			if (models.length === 0) {
 				ctx.ui.notify("No authenticated models available. Use /login or configure an API key first.", "error");
@@ -50,8 +48,10 @@ export default function tempModelExtension(pi: ExtensionAPI) {
 	});
 }
 
-function listAvailableModels(ctx: Pick<ExtensionCommandContext, "modelRegistry">): ModelLike[] {
-	ctx.modelRegistry.refresh();
+async function listAvailableModels(
+	ctx: Pick<ExtensionCommandContext, "modelRegistry">,
+): Promise<ModelLike[]> {
+	await ctx.modelRegistry.refresh();
 	return ctx.modelRegistry.getAvailable().sort((a, b) => formatModelRef(a).localeCompare(formatModelRef(b)));
 }
 

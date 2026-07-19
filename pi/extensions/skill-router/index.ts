@@ -38,6 +38,8 @@ import {
 const CONFIG_FILE = "skillsets.json";
 const LIVE = "● live";
 const MUTED = "○ muted";
+const IN_SET = "● in";
+const OUT_OF_SET = "○ out";
 
 export default function skillRouterExtension(pi: ExtensionAPI) {
 	pi.registerFlag("skillset", {
@@ -65,17 +67,22 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 		pi.appendEntry<SessionSkillState>(SESSION_ENTRY_TYPE, state);
 	}
 
-	function restoreState(ctx: ExtensionContext): void {
+	function restoreState(ctx: ExtensionContext): boolean {
 		state = defaultSessionState();
+		let foundState = false;
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "custom" || entry.customType !== SESSION_ENTRY_TYPE) continue;
 			const restored = normalizeSessionState(entry.data);
-			if (restored) state = restored;
+			if (restored) {
+				state = restored;
+				foundState = true;
+			}
 		}
 		if (state.activeSkillset && !config.skillsets[state.activeSkillset]) {
 			state = { version: 1, disabledSkills: state.disabledSkills };
 		}
 		updateStatus(ctx);
+		return foundState;
 	}
 
 	function updateStatus(ctx: ExtensionContext): void {
@@ -126,10 +133,6 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 		const available = new Set(availableNames);
 		const missing = members.filter((member) => !available.has(member));
 		const activeMembers = members.filter((member) => available.has(member));
-		if (activeMembers.length === 0) {
-			ctx.ui.notify(`Skillset "${name}" has no loaded skills`, "error");
-			return false;
-		}
 
 		state = activateSkillset(name, activeMembers, availableNames);
 		persistState();
@@ -144,6 +147,37 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 		persistState();
 		updateStatus(ctx);
 		ctx.ui.notify("All loaded skills enabled for this session", "info");
+	}
+
+	function setDefaultSkillset(name: string | undefined, ctx: ExtensionContext): boolean {
+		if (configError) {
+			ctx.ui.notify(`Fix ${configPath} before saving: ${configError}`, "error");
+			return false;
+		}
+		if (name && !config.skillsets[name]) {
+			ctx.ui.notify(`Unknown skillset "${name}"`, "error");
+			return false;
+		}
+
+		const { defaultSkillset: _currentDefault, ...baseConfig } = config;
+		const nextConfig: SkillsetsConfig = {
+			...baseConfig,
+			...(name ? { defaultSkillset: name } : {}),
+		};
+		try {
+			saveSkillsetsConfig(configPath, nextConfig);
+			config = nextConfig;
+			ctx.ui.notify(
+				name
+					? `Default skillset set to "${name}"; current session unchanged`
+					: "Default skillset cleared; current session unchanged",
+				"info",
+			);
+			return true;
+		} catch (error) {
+			ctx.ui.notify(errorMessage(error), "error");
+			return false;
+		}
 	}
 
 	async function showSkillsManager(ctx: ExtensionCommandContext): Promise<void> {
@@ -217,7 +251,7 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 
 		const names = Object.keys(config.skillsets).sort();
 		if (names.length === 0) {
-			ctx.ui.notify(`No skillsets defined. Use /skillset create <name> <skill...>`, "warning");
+			ctx.ui.notify("No skillsets defined. Use /skillset create <name>", "warning");
 			return;
 		}
 
@@ -227,11 +261,17 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 				label: state.activeSkillset ? "Enable all skills" : "Enable all skills (current)",
 				description: "Clear the session skillset",
 			},
-			...names.map((name) => ({
-				value: name,
-				label: name === state.activeSkillset ? `${name} (current)` : name,
-				description: config.skillsets[name].join(" + "),
-			})),
+			...names.map((name) => {
+				const markers = [
+					...(name === state.activeSkillset ? ["current"] : []),
+					...(name === config.defaultSkillset ? ["default"] : []),
+				];
+				return {
+					value: name,
+					label: markers.length > 0 ? `${name} (${markers.join(", ")})` : name,
+					description: config.skillsets[name].join(" + "),
+				};
+			}),
 		];
 
 		const selected = await ctx.ui.custom<string | undefined>((tui, theme, _keybindings, done) => {
@@ -273,6 +313,120 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 		else if (selected) activateSet(selected, loadedSkills(ctx), ctx);
 	}
 
+	async function showDefaultSkillsetSelector(ctx: ExtensionCommandContext): Promise<void> {
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify("Use /skillset default <name> or /skillset clear-default", "error");
+			return;
+		}
+
+		const names = Object.keys(config.skillsets).sort();
+		if (names.length === 0) {
+			ctx.ui.notify("No skillsets defined", "warning");
+			return;
+		}
+
+		const labels = [
+			config.defaultSkillset ? "No default" : "No default (current)",
+			...names.map((name) => (name === config.defaultSkillset ? `${name} (current)` : name)),
+		];
+		const selected = await ctx.ui.select("Select default skillset", labels);
+		if (!selected) return;
+		if (selected === "No default" || selected === "No default (current)") {
+			setDefaultSkillset(undefined, ctx);
+			return;
+		}
+		setDefaultSkillset(selected.replace(/ \(current\)$/, ""), ctx);
+	}
+
+	async function showSkillsetEditor(
+		name: string,
+		members: readonly string[],
+		mode: "create" | "edit",
+		ctx: ExtensionCommandContext,
+	): Promise<void> {
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify(`Use /skillset ${mode} ${name} in TUI mode`, "error");
+			return;
+		}
+		if (configError) {
+			ctx.ui.notify(`Fix ${configPath} before saving: ${configError}`, "error");
+			return;
+		}
+
+		const skills = loadedSkills(ctx);
+		const skillByName = new Map(skills.map((skill) => [skill.name, skill]));
+		const names = [...new Set([...skills.map((skill) => skill.name), ...members])].sort();
+		const selected = new Set(members);
+
+		await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+			const items: SettingItem[] = names.map((skillName) => {
+				const skill = skillByName.get(skillName);
+				return {
+					id: skillName,
+					label: skillName,
+					description: skill
+						? `${skill.description} · ${skill.sourceInfo.scope}`
+						: "Not currently loaded · retained until toggled out",
+					currentValue: selected.has(skillName) ? IN_SET : OUT_OF_SET,
+					values: [IN_SET, OUT_OF_SET],
+				};
+			});
+			const border = new DynamicBorder((text: string) => theme.fg("borderAccent", text));
+			const baseListTheme = getSettingsListTheme();
+			const listTheme = {
+				...baseListTheme,
+				hint: (text: string) => baseListTheme.hint(text.replace("Esc to cancel", "Esc to save & close")),
+			};
+			const settings = new SettingsList(
+				items,
+				Math.min(items.length + 2, 16),
+				listTheme,
+				(skillName, value) => {
+					if (value === IN_SET) selected.add(skillName);
+					else selected.delete(skillName);
+					tui.requestRender();
+				},
+				() => {
+					const nextConfig: SkillsetsConfig = {
+						...config,
+						skillsets: { ...config.skillsets, [name]: [...selected].sort() },
+					};
+					try {
+						saveSkillsetsConfig(configPath, nextConfig);
+						config = nextConfig;
+						updateStatus(ctx);
+						ctx.ui.notify(`Skillset "${name}" ${mode === "create" ? "created" : "updated"}`, "info");
+						done(undefined);
+					} catch (error) {
+						ctx.ui.notify(errorMessage(error), "error");
+					}
+				},
+				{ enableSearch: true },
+			);
+
+			return {
+				render(width: number) {
+					return [
+						...border.render(width),
+						truncateToWidth(` ${theme.fg("accent", theme.bold(`${mode === "create" ? "CREATE" : "EDIT"} SKILLSET · ${name}`))}`, width),
+						truncateToWidth(` ${theme.fg("dim", `${selected.size}/${names.length} selected · changes save on exit`)}`, width),
+						"",
+						...settings.render(width),
+						...border.render(width),
+					];
+				},
+				invalidate() {
+					border.invalidate();
+					settings.invalidate();
+				},
+				handleInput(data: string) {
+					settings.handleInput(data);
+					tui.requestRender();
+				},
+			};
+		});
+	}
+
 	pi.registerCommand("skills", {
 		description: "Manage session skill routes: /skills [enable|disable|reset] [skill]",
 		getArgumentCompletions: (prefix) => completeSkillsArguments(prefix, pi, skillIsEnabled),
@@ -297,7 +451,7 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("skillset", {
-		description: "Create and activate session skillsets",
+		description: "Create, activate, and choose a default skillset",
 		getArgumentCompletions: (prefix) => completeSkillsetArguments(prefix, config),
 		handler: async (args, ctx) => {
 			const parts = args.trim().split(/\s+/).filter(Boolean);
@@ -307,12 +461,63 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			if ((action === "enable" || action === "activate") && name && memberParts.length === 0) {
+			if (action === "set" && name && memberParts.length === 0) {
 				activateSet(name, loadedSkills(ctx), ctx);
 				return;
 			}
-			if ((action === "clear" || action === "reset") && !name) {
+			if (action === "reset" && !name) {
 				resetSkills(ctx);
+				return;
+			}
+			if (action === "default" && !name) {
+				await showDefaultSkillsetSelector(ctx);
+				return;
+			}
+			if (action === "default" && name && memberParts.length === 0) {
+				setDefaultSkillset(name, ctx);
+				return;
+			}
+			if (action === "clear-default" && !name) {
+				setDefaultSkillset(undefined, ctx);
+				return;
+			}
+			if (action === "create" && name && memberParts.length === 0) {
+				if (!isValidSkillsetName(name)) {
+					ctx.ui.notify("Skillset names use lowercase letters, numbers, and single hyphens", "error");
+					return;
+				}
+				if (config.skillsets[name]) {
+					ctx.ui.notify(`Skillset "${name}" already exists`, "error");
+					return;
+				}
+				await showSkillsetEditor(name, [], "create", ctx);
+				return;
+			}
+			if (action === "edit" && memberParts.length === 0) {
+				if (configError) {
+					ctx.ui.notify(`Fix ${configPath} before saving: ${configError}`, "error");
+					return;
+				}
+				let selectedName: string | undefined = name || undefined;
+				if (!selectedName) {
+					if (ctx.mode !== "tui") {
+						ctx.ui.notify("Use /skillset edit <name>", "error");
+						return;
+					}
+					const names = Object.keys(config.skillsets).sort();
+					if (names.length === 0) {
+						ctx.ui.notify("No skillsets defined", "warning");
+						return;
+					}
+					selectedName = await ctx.ui.select("Select skillset to edit", names);
+					if (!selectedName) return;
+				}
+				const members = config.skillsets[selectedName];
+				if (!members) {
+					ctx.ui.notify(`Unknown skillset "${selectedName}"`, "error");
+					return;
+				}
+				await showSkillsetEditor(selectedName, members, "edit", ctx);
 				return;
 			}
 			if (action === "create" && name && memberParts.length > 0) {
@@ -360,17 +565,27 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 					ctx.ui.notify(`Unknown skillset "${name}"`, "error");
 					return;
 				}
+				const preservedState = state.activeSkillset === name ? materializeState(loadedSkills(ctx)) : undefined;
+				const deletingDefault = config.defaultSkillset === name;
 				const { [name]: _removed, ...remaining } = config.skillsets;
-				const nextConfig = { ...config, skillsets: remaining };
+				const { defaultSkillset: _currentDefault, ...baseConfig } = config;
+				const nextConfig: SkillsetsConfig = {
+					...baseConfig,
+					...(!deletingDefault && config.defaultSkillset ? { defaultSkillset: config.defaultSkillset } : {}),
+					skillsets: remaining,
+				};
 				try {
 					saveSkillsetsConfig(configPath, nextConfig);
 					config = nextConfig;
-					if (state.activeSkillset === name) {
-						state = { version: 1, disabledSkills: state.disabledSkills };
+					if (preservedState) {
+						state = { version: 1, disabledSkills: preservedState.disabledSkills };
 						persistState();
 						updateStatus(ctx);
 					}
-					ctx.ui.notify(`Skillset "${name}" deleted`, "info");
+					ctx.ui.notify(
+						`Skillset "${name}" deleted${deletingDefault ? "; default cleared" : ""}${preservedState ? "; current session preserved as custom" : ""}`,
+						"info",
+					);
 				} catch (error) {
 					ctx.ui.notify(errorMessage(error), "error");
 				}
@@ -378,7 +593,7 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 			}
 
 			ctx.ui.notify(
-				"Usage: /skillset | /skillset create <name> <skill...> | /skillset enable <name> | /skillset delete <name> | /skillset clear",
+				"Usage: /skillset | /skillset create <name> [skills...] | /skillset edit [name] | /skillset delete <name> | /skillset set <name> | /skillset reset | /skillset default [name] | /skillset clear-default",
 				"warning",
 			);
 		},
@@ -386,25 +601,42 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", (event, ctx) => {
 		loadConfig(ctx);
-		restoreState(ctx);
+		const hasSessionState = restoreState(ctx);
 
-		if (event.reason !== "startup") return;
-		const skillsetFlag = pi.getFlag("skillset");
-		if (typeof skillsetFlag !== "string" || skillsetFlag.trim().length === 0) return;
+		if (event.reason === "startup") {
+			const skillsetFlag = pi.getFlag("skillset");
+			if (typeof skillsetFlag === "string" && skillsetFlag.trim().length > 0) {
+				const name = skillsetFlag.trim();
+				if (!config.skillsets[name]) {
+					ctx.ui.notify(`Unknown startup skillset "${name}"; keeping the session's existing skill state`, "error");
+					return;
+				}
 
-		const name = skillsetFlag.trim();
-		if (!config.skillsets[name]) {
-			ctx.ui.notify(`Unknown startup skillset "${name}"; keeping the session's existing skill state`, "error");
-			return;
+				state = { version: 1, disabledSkills: [], activeSkillset: name };
+				persistState();
+				updateStatus(ctx);
+				ctx.ui.notify(`Skillset "${name}" enabled from --skillset`, "info");
+				return;
+			}
 		}
 
-		state = { version: 1, disabledSkills: [], activeSkillset: name };
+		if (hasSessionState || !config.defaultSkillset) return;
+		const contextEntryTypes = new Set(["message", "custom_message", "compaction", "branch_summary"]);
+		const isNewSession =
+			event.reason === "new" ||
+			(event.reason === "startup" &&
+				!ctx.sessionManager.getEntries().some((entry) => contextEntryTypes.has(entry.type)));
+		if (!isNewSession) return;
+
+		state = { version: 1, disabledSkills: [], activeSkillset: config.defaultSkillset };
 		persistState();
 		updateStatus(ctx);
-		ctx.ui.notify(`Skillset "${name}" enabled from --skillset`, "info");
+		ctx.ui.notify(`Default skillset "${config.defaultSkillset}" enabled for this session`, "info");
 	});
 
-	pi.on("session_tree", (_event, ctx) => restoreState(ctx));
+	pi.on("session_tree", (_event, ctx) => {
+		restoreState(ctx);
+	});
 
 	pi.on("input", (event, ctx) => {
 		const skillName = parseSkillInvocation(event.text);
@@ -456,11 +688,11 @@ function completeSkillsArguments(prefix: string, pi: ExtensionAPI, isEnabled: (s
 function completeSkillsetArguments(prefix: string, config: SkillsetsConfig) {
 	const parts = prefix.split(/\s+/);
 	if (parts.length === 1) {
-		return ["create", "enable", "delete", "clear"]
+		return ["create", "edit", "delete", "set", "reset", "default", "clear-default"]
 			.filter((action) => action.startsWith(parts[0]))
 			.map((action) => ({ value: action, label: action }));
 	}
-	if (parts.length === 2 && (parts[0] === "enable" || parts[0] === "delete")) {
+	if (parts.length === 2 && (parts[0] === "edit" || parts[0] === "set" || parts[0] === "default" || parts[0] === "delete")) {
 		return Object.keys(config.skillsets)
 			.filter((name) => name.startsWith(parts[1]))
 			.sort()

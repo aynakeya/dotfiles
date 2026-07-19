@@ -8,6 +8,7 @@ export interface SessionSkillState {
 
 export interface SkillsetsConfig {
 	version: 1;
+	defaultSkillset?: string;
 	skillsets: Record<string, string[]>;
 }
 
@@ -39,7 +40,7 @@ export function normalizeSkillsetsConfig(value: unknown): SkillsetsConfig {
 		throw new Error("config must be a JSON object");
 	}
 
-	const candidate = value as { skillsets?: unknown };
+	const candidate = value as { defaultSkillset?: unknown; skillsets?: unknown };
 	if (!candidate.skillsets || typeof candidate.skillsets !== "object" || Array.isArray(candidate.skillsets)) {
 		throw new Error('config must contain a "skillsets" object');
 	}
@@ -55,7 +56,20 @@ export function normalizeSkillsetsConfig(value: unknown): SkillsetsConfig {
 		skillsets[name] = uniqueNames(skills);
 	}
 
-	return { version: 1, skillsets };
+	if (candidate.defaultSkillset !== undefined) {
+		if (typeof candidate.defaultSkillset !== "string" || !isValidSkillsetName(candidate.defaultSkillset)) {
+			throw new Error("default skillset must be a valid skillset name");
+		}
+		if (!skillsets[candidate.defaultSkillset]) {
+			throw new Error(`default skillset "${candidate.defaultSkillset}" does not exist`);
+		}
+	}
+
+	return {
+		version: 1,
+		...(candidate.defaultSkillset ? { defaultSkillset: candidate.defaultSkillset } : {}),
+		skillsets,
+	};
 }
 
 export function isSkillEnabled(state: SessionSkillState, skillName: string): boolean {

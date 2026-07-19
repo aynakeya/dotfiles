@@ -41,7 +41,7 @@ export default function (pi: ExtensionAPI) {
 
       if (argument) {
         const parsed = parseReasoningLevel(argument, REASONING_USAGE);
-        if (parsed.error) {
+        if ("error" in parsed) {
           ctx.ui.notify(parsed.error, "warning");
           return;
         }
@@ -82,7 +82,7 @@ export default function (pi: ExtensionAPI) {
       const argument = args.trim();
       if (argument) {
         const parsed = parseReasoningLevel(argument, REASONING_DEFAULT_USAGE);
-        if (parsed.error) {
+        if ("error" in parsed) {
           ctx.ui.notify(parsed.error, "warning");
           return;
         }
@@ -124,7 +124,7 @@ function getArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | nu
 function parseReasoningLevel(
   input: string,
   usage: string,
-): { level: ReasoningLevel; error?: undefined } | { level?: undefined; error: string } {
+): { level: ReasoningLevel } | { error: string } {
   const parts = input.split(/\s+/);
   if (parts.length !== 1) return { error: `Usage: ${usage}` };
 
