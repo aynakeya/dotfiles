@@ -1,4 +1,10 @@
 export const SESSION_ENTRY_TYPE = "skill-router-state";
+export const PROJECT_SKILLS_SELECTOR = "project:*";
+
+export interface SkillRoute {
+	name: string;
+	scope: string;
+}
 
 export interface SessionSkillState {
 	version: 1;
@@ -51,7 +57,7 @@ export function normalizeSkillsetsConfig(value: unknown): SkillsetsConfig {
 			throw new Error(`invalid skillset name: ${name}`);
 		}
 		if (!Array.isArray(skills) || !skills.every((skill) => typeof skill === "string")) {
-			throw new Error(`skillset "${name}" must be an array of skill names`);
+			throw new Error(`skillset "${name}" must be an array of skill names or selectors`);
 		}
 		skillsets[name] = uniqueNames(skills);
 	}
@@ -104,15 +110,38 @@ export function activateSkillset(
 	};
 }
 
+export function skillsetIncludesSkill(
+	members: readonly string[],
+	skillName: string,
+	scope: string | undefined,
+): boolean {
+	return members.includes(skillName) || (scope === "project" && members.includes(PROJECT_SKILLS_SELECTOR));
+}
+
+export function resolveSkillsetMembers(
+	members: readonly string[],
+	availableSkills: readonly SkillRoute[],
+): string[] {
+	return uniqueNames(
+		availableSkills
+			.filter((skill) => skillsetIncludesSkill(members, skill.name, skill.scope))
+			.map((skill) => skill.name),
+	);
+}
+
 export function materializeActiveSkillset(
 	state: SessionSkillState,
 	skillsets: Readonly<Record<string, readonly string[]>>,
-	availableSkills: readonly string[],
+	availableSkills: readonly SkillRoute[],
 ): SessionSkillState {
 	if (!state.activeSkillset) return state;
 	const members = skillsets[state.activeSkillset];
 	if (!members) return { version: 1, disabledSkills: state.disabledSkills };
-	return activateSkillset(state.activeSkillset, members, availableSkills);
+	return activateSkillset(
+		state.activeSkillset,
+		resolveSkillsetMembers(members, availableSkills),
+		availableSkills.map((skill) => skill.name),
+	);
 }
 
 export function replaceLast(haystack: string, needle: string, replacement: string): string | undefined {

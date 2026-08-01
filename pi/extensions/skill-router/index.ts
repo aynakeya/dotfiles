@@ -27,10 +27,13 @@ import {
 	materializeActiveSkillset,
 	normalizeSessionState,
 	parseNameList,
+	PROJECT_SKILLS_SELECTOR,
+	resolveSkillsetMembers,
 	parseSkillInvocation,
 	replaceLast,
 	SESSION_ENTRY_TYPE,
 	setSkillEnabled,
+	skillsetIncludesSkill,
 	type SessionSkillState,
 	type SkillsetsConfig,
 } from "./state.ts";
@@ -101,13 +104,29 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 		return ctx.getSystemPromptOptions().skills ?? [];
 	}
 
-	function skillIsEnabled(skillName: string): boolean {
+	function skillCommandScope(skillName: string): Skill["sourceInfo"]["scope"] | undefined {
+		return pi
+			.getCommands()
+			.find((command) => command.source === "skill" && command.name === `skill:${skillName}`)
+			?.sourceInfo.scope;
+	}
+
+	function skillIsEnabled(
+		skillName: string,
+		scope: Skill["sourceInfo"]["scope"] | undefined = skillCommandScope(skillName),
+	): boolean {
 		const activeMembers = state.activeSkillset ? config.skillsets[state.activeSkillset] : undefined;
-		return activeMembers ? activeMembers.includes(skillName) : isSkillEnabled(state, skillName);
+		return activeMembers
+			? skillsetIncludesSkill(activeMembers, skillName, scope)
+			: isSkillEnabled(state, skillName);
 	}
 
 	function materializeState(skills: readonly Skill[]): SessionSkillState {
-		return materializeActiveSkillset(state, config.skillsets, skills.map((skill) => skill.name));
+		return materializeActiveSkillset(
+			state,
+			config.skillsets,
+			skills.map((skill) => ({ name: skill.name, scope: skill.sourceInfo.scope })),
+		);
 	}
 
 	function setOneSkill(skillName: string, enabled: boolean, skills: readonly Skill[], ctx: ExtensionContext): boolean {
@@ -129,10 +148,13 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 			return false;
 		}
 
-		const availableNames = skills.map((skill) => skill.name);
+		const availableSkills = skills.map((skill) => ({ name: skill.name, scope: skill.sourceInfo.scope }));
+		const availableNames = availableSkills.map((skill) => skill.name);
 		const available = new Set(availableNames);
-		const missing = members.filter((member) => !available.has(member));
-		const activeMembers = members.filter((member) => available.has(member));
+		const missing = members.filter(
+			(member) => member !== PROJECT_SKILLS_SELECTOR && !available.has(member),
+		);
+		const activeMembers = resolveSkillsetMembers(members, availableSkills);
 
 		state = activateSkillset(name, activeMembers, availableNames);
 		persistState();
@@ -197,7 +219,7 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 				id: skill.name,
 				label: skill.name,
 				description: `${skill.description} · ${skill.sourceInfo.scope}${skill.disableModelInvocation ? " · manual invocation only" : ""}`,
-				currentValue: skillIsEnabled(skill.name) ? LIVE : MUTED,
+				currentValue: skillIsEnabled(skill.name, skill.sourceInfo.scope) ? LIVE : MUTED,
 				values: [LIVE, MUTED],
 			}));
 			const border = new DynamicBorder((text: string) => theme.fg("borderAccent", text));
@@ -217,7 +239,9 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 
 			return {
 				render(width: number) {
-					const enabledCount = skills.filter((skill) => skillIsEnabled(skill.name)).length;
+					const enabledCount = skills.filter((skill) =>
+						skillIsEnabled(skill.name, skill.sourceInfo.scope),
+					).length;
 					const profile = state.activeSkillset ?? (state.disabledSkills.length > 0 ? "custom" : "all");
 					const members = state.activeSkillset ? config.skillsets[state.activeSkillset] ?? [] : [];
 					const route = members.length > 0 ? `SET → ${members.join(" + ")}` : "Toggle a route to customize this session";
@@ -355,11 +379,27 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 
 		const skills = loadedSkills(ctx);
 		const skillByName = new Map(skills.map((skill) => [skill.name, skill]));
-		const names = [...new Set([...skills.map((skill) => skill.name), ...members])].sort();
+		const names = [
+			PROJECT_SKILLS_SELECTOR,
+			...[...new Set([
+				...skills.map((skill) => skill.name),
+				...members.filter((member) => member !== PROJECT_SKILLS_SELECTOR),
+			])].sort(),
+		];
 		const selected = new Set(members);
 
 		await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
 			const items: SettingItem[] = names.map((skillName) => {
+				if (skillName === PROJECT_SKILLS_SELECTOR) {
+					return {
+						id: skillName,
+						label: "All project skills",
+						description: `${PROJECT_SKILLS_SELECTOR} · dynamically include project-scoped skills`,
+						currentValue: selected.has(skillName) ? IN_SET : OUT_OF_SET,
+						values: [IN_SET, OUT_OF_SET],
+					};
+				}
+
 				const skill = skillByName.get(skillName);
 				return {
 					id: skillName,
@@ -540,7 +580,9 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 					return;
 				}
 				const available = new Set(loadedSkills(ctx).map((skill) => skill.name));
-				const unknown = members.filter((member) => !available.has(member));
+				const unknown = members.filter(
+					(member) => member !== PROJECT_SKILLS_SELECTOR && !available.has(member),
+				);
 				if (unknown.length > 0) {
 					ctx.ui.notify(`Unknown skills: ${unknown.join(", ")}`, "error");
 					return;
@@ -651,12 +693,16 @@ export default function skillRouterExtension(pi: ExtensionAPI) {
 		if (event.systemPromptOptions.selectedTools && !event.systemPromptOptions.selectedTools.includes("read")) return;
 
 		const disabledVisibleSkills = skills.filter(
-			(skill) => !skill.disableModelInvocation && !skillIsEnabled(skill.name),
+			(skill) =>
+				!skill.disableModelInvocation &&
+				!skillIsEnabled(skill.name, skill.sourceInfo.scope),
 		);
 		if (disabledVisibleSkills.length === 0) return;
 
 		const originalBlock = formatSkillsForPrompt(skills);
-		const enabledBlock = formatSkillsForPrompt(skills.filter((skill) => skillIsEnabled(skill.name)));
+		const enabledBlock = formatSkillsForPrompt(
+			skills.filter((skill) => skillIsEnabled(skill.name, skill.sourceInfo.scope)),
+		);
 		const systemPrompt = replaceLast(event.systemPrompt, originalBlock, enabledBlock);
 		if (systemPrompt === undefined) {
 			ctx.ui.notify("Skill Router could not locate Pi's skill prompt block; no skills were filtered", "error");
