@@ -8,11 +8,13 @@ let suppressDepth = 0;
 let originalSetDefaultModelAndProvider: SettingsManagerPrototype["setDefaultModelAndProvider"] | undefined;
 let originalSetDefaultThinkingLevel: SettingsManagerPrototype["setDefaultThinkingLevel"] | undefined;
 
+const MODEL_REFRESH_TIMEOUT_MS = 15_000;
+
 export default function tempModelExtension(pi: ExtensionAPI) {
 	let completionValues: string[] = [];
 
-	pi.on("session_start", async (_event, ctx) => {
-		completionValues = (await listAvailableModels(ctx)).map(formatModelRef);
+	pi.on("session_start", (_event, ctx) => {
+		completionValues = getAvailableModels(ctx).map(formatModelRef);
 	});
 
 	pi.registerCommand("tmodel", {
@@ -49,9 +51,22 @@ export default function tempModelExtension(pi: ExtensionAPI) {
 }
 
 async function listAvailableModels(
-	ctx: Pick<ExtensionCommandContext, "modelRegistry">,
+	ctx: Pick<ExtensionCommandContext, "modelRegistry" | "ui">,
 ): Promise<ModelLike[]> {
-	await ctx.modelRegistry.refresh();
+	const refresh = await ctx.modelRegistry.refresh({
+		signal: AbortSignal.timeout(MODEL_REFRESH_TIMEOUT_MS),
+	});
+	if (refresh.aborted) {
+		ctx.ui.notify("Model refresh timed out; showing cached models.", "warning");
+	} else if (refresh.errors.size === 1) {
+		ctx.ui.notify(`Could not refresh ${refresh.errors.keys().next().value}; showing cached models.`, "warning");
+	} else if (refresh.errors.size > 1) {
+		ctx.ui.notify(`Could not refresh ${refresh.errors.size} model catalogs; showing cached models.`, "warning");
+	}
+	return getAvailableModels(ctx);
+}
+
+function getAvailableModels(ctx: Pick<ExtensionCommandContext, "modelRegistry">): ModelLike[] {
 	return ctx.modelRegistry.getAvailable().sort((a, b) => formatModelRef(a).localeCompare(formatModelRef(b)));
 }
 
