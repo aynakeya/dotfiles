@@ -3,4 +3,5 @@
   "app.model.cycleForward": [],
   "app.model.cycleBackward": [],
   "app.thinking.cycle": [],
+  "app.message.followUp": ["alt+enter", "alt+down"]
 }
