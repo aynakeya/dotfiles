@@ -6,7 +6,8 @@ export default function modelMetricsExtension(pi: ExtensionAPI) {
 	let agentStartedAt = 0;
 	let timing: { requestStartedAt: number; firstOutputAt?: number } | undefined;
 	let ttftMs: number | undefined;
-	let tokensPerSecond = 0;
+	let decodingTokensPerSecond = 0;
+	let endToEndTokensPerSecond = 0;
 	let liveOutputTokens = 0;
 	let workingTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -20,8 +21,11 @@ export default function modelMetricsExtension(pi: ExtensionAPI) {
 		if (ctx.mode !== "tui") return;
 
 		const now = performance.now();
-		if (timing?.firstOutputAt !== undefined && liveOutputTokens > 0) {
-			tokensPerSecond = (liveOutputTokens * 1000) / (now - timing.firstOutputAt);
+		if (timing && liveOutputTokens > 0) {
+			endToEndTokensPerSecond = (liveOutputTokens * 1000) / (now - timing.requestStartedAt);
+			if (timing.firstOutputAt !== undefined) {
+				decodingTokensPerSecond = (liveOutputTokens * 1000) / (now - timing.firstOutputAt);
+			}
 		}
 
 		const elapsedSeconds = Math.floor((now - agentStartedAt) / 1000);
@@ -36,7 +40,9 @@ export default function modelMetricsExtension(pi: ExtensionAPI) {
 					? `${Math.round(ttftMs)}ms`
 					: `${(ttftMs / 1000).toFixed(ttftMs < 10_000 ? 2 : 1)}s`;
 
-		ctx.ui.setWorkingMessage(`Working (${elapsed} · TTFT ${ttft} · TPS ${tokensPerSecond.toFixed(1)})`);
+		ctx.ui.setWorkingMessage(
+			`Working (${elapsed} · TTFT ${ttft} · TPS ${decodingTokensPerSecond.toFixed(1)} | ${endToEndTokensPerSecond.toFixed(1)})`,
+		);
 	};
 
 	pi.on("agent_start", (_event, ctx) => {
@@ -44,7 +50,8 @@ export default function modelMetricsExtension(pi: ExtensionAPI) {
 		agentStartedAt = performance.now();
 		timing = undefined;
 		ttftMs = undefined;
-		tokensPerSecond = 0;
+		decodingTokensPerSecond = 0;
+		endToEndTokensPerSecond = 0;
 		liveOutputTokens = 0;
 		updateWorkingMessage(ctx);
 		workingTimer = setInterval(() => updateWorkingMessage(ctx), WORKING_UPDATE_INTERVAL_MS);
@@ -78,12 +85,13 @@ export default function modelMetricsExtension(pi: ExtensionAPI) {
 	pi.on("message_end", (event, ctx) => {
 		if (!timing || event.message.role !== "assistant") return;
 
-		const firstOutputAt = timing.firstOutputAt;
+		const endedAt = performance.now();
+		endToEndTokensPerSecond = (event.message.usage.output * 1000) / (endedAt - timing.requestStartedAt);
+		if (timing.firstOutputAt !== undefined) {
+			decodingTokensPerSecond = (event.message.usage.output * 1000) / (endedAt - timing.firstOutputAt);
+		}
 		timing = undefined;
 		liveOutputTokens = 0;
-		if (firstOutputAt === undefined) return;
-
-		tokensPerSecond = (event.message.usage.output * 1000) / (performance.now() - firstOutputAt);
 		updateWorkingMessage(ctx);
 	});
 
