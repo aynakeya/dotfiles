@@ -1,117 +1,77 @@
-# Writing guideline
+# 编码准则
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+**除非用户特别指明，否则以下行为必须遵守。**
 
-**Tradeoff:** These guidelines bias toward correctness, simplicity, and controlled changes over speed. For trivial tasks, use judgment.
+用于指导 Agent 产出简单、正确、聚焦的代码修改。
 
-## 1. Think Before Coding
+## 1. 保持执行流程轻量
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+**简单任务就用简单流程，不要把每次修改都当成发布前检查。**
 
-Before implementing:
-- Inspect the relevant code, tests, types, and existing patterns first.
-- Do not invent requirements, constraints, APIs, or failure modes that are not supported by evidence.
-- State assumptions explicitly when they materially affect the implementation.
-- If multiple interpretations exist, surface them instead of silently choosing one.
-- If a simpler approach exists, prefer it and say so when the tradeoff matters.
-- Ask for clarification only when the ambiguity cannot be resolved from the codebase and would materially change the implementation.
-- If something is unclear, do not hide the uncertainty behind defensive code.
+- 除非用户明确要求，不要设计冗长、多阶段的 workflow。
+- 小修改只运行与本次修改直接相关的最小检查或测试。
+- 严禁每次修改或每次小修改后都运行全量测试、全量构建或完整检查。
+- 不要运行与本次修改无关的测试。
+- 全量测试、完整基线、冒烟测试、门禁检查等重型验证，只用于大型修改，或用户明确要求上线、发布、提交、合并等场景。
+- 如果修改明显不会影响某项行为，或结果可以直接从代码判断，不要为了形式重复运行测试。
+- 已经验证过且相关代码没有变化的检查，不要重复执行。
 
-## 2. Simplicity First
+## 2. 简单优先
 
-**Write the minimum code that solves the actual problem. Nothing speculative.**
+**只写解决当前问题所需的最少代码。**
 
-- No features beyond what was asked.
-- No abstractions for hypothetical future needs.
-- No "flexibility" or "configurability" that was not requested.
-- No over engineering.
-- Prefer deletion over addition when both solve the problem.
-- If two approaches are equivalent, use the simpler one.
-- Reuse existing code, standard library features, platform features, and established project patterns before introducing new machinery.
-- Do not create helpers, wrappers, classes, utilities, or abstractions for a one-off operation unless they materially improve clarity.
-- Avoid indirection that only moves a few obvious lines somewhere else.
-- If you write 200 lines and it could reasonably be 50, rewrite it.
+- 不添加未要求的功能、抽象、配置能力或“未来扩展性”。
+- 优先复用已有代码、标准库、平台能力和项目现有模式。
+- 避免不必要的 helper、wrapper、DTO、转换层、间接层和过度设计。
+- 不要仅为了“分层”“解耦”或形式上的架构完整性创建 DTO、映射对象或中间模型；没有真实边界或数据转换需求时，直接使用现有类型。
+- 能删除就不要新增，能简单实现就不要复杂实现。
 
-Ask yourself:
+## 3. 避免防御性过度设计
 
-> Would a senior engineer looking at this diff ask why this is so complicated?
+**在边界处校验，信任已经建立的内部契约。**
 
-If yes, simplify it.
+- 校验不可信输入和真实的系统边界。
+- 不要为理论上的“不可能状态”添加额外保护、重试、回退或默认值。
+- 不要吞掉错误，也不要把失败伪装成正常结果。
+- 如果内部契约本身有问题，修复契约或根因，而不是到处添加防御代码。
 
-## 3. Avoid Defensive Overengineering
+## 4. 先理解，再编码
 
-**Validate boundaries. Trust internal contracts. Don't hide failures.**
+**先搞清楚问题，再开始实现。**
 
-- Validate untrusted inputs and system boundaries, not every internal call.
-- Don't add checks or fallbacks for states that established contracts say cannot happen.
-- Don't add speculative retries, defaults, or error handling "just in case."
-- Never swallow errors or turn failures into apparently valid results.
-- If an impossible state can actually happen, fix the contract or root cause instead of scattering defensive checks.
+- 先检查相关代码、测试、类型定义和已有实现模式。
+- 不要凭空假设需求、接口、约束或失败场景。
+- 只有在假设或歧义会实质影响实现时，才明确指出。
+- 在满足需求和现有代码结构的前提下，优先选择最简单的解释。
 
-If an "impossible" state is actually reachable, fix the violated contract or validate it at the correct boundary rather than scattering guards throughout the codebase.
+## 5. 最小范围修改
 
-## 4. Surgical Changes
+**只修改完成任务真正需要修改的部分。**
 
-**Touch only what you must. Clean up only your own mess.**
+- 不要顺手重构、重命名、格式化或清理无关代码。
+- 遵循现有架构和代码风格。
+- 只清理由本次修改直接产生的无用代码、依赖和引用。
+- 每一处修改都应该能直接对应到任务本身或其必要后果。
 
-When editing existing code:
-- Don't "improve" adjacent code, comments, formatting, or naming unless required for the requested change.
-- Don't refactor unrelated code.
-- Match the existing style and architecture unless changing them is part of the task.
-- If you notice unrelated dead code or problems, mention them instead of silently fixing them.
+## 6. 测试核心行为，而不是代码改动
 
-When your changes create orphans:
-- Remove imports, variables, functions, files, or dependencies made unused by YOUR changes.
-- Don't remove pre-existing dead code unless asked.
+**测试用于持续保障核心功能、真实业务行为和关键不变量，而不是记录或证明代码修改。**
 
-Every changed line should trace directly to:
-1. The user's request.
-2. A necessary consequence of implementing that request.
-3. Cleanup caused by your own changes.
+- 不要为每一次代码修改机械地新增测试。
+- 不要为了证明、标记或鉴别某次修改、删除或还原而新增一次性测试。
+- 不要测试从代码本身就能直接、明显判断的事实。
+- 不要为了确认某个字段、函数、分支或实现细节被添加、删除或改名而单独编写测试。
+- 已有测试、构建或实际执行已经足以验证修改时，不要额外新增测试。
+- 优先测试业务行为、公开契约、关键边界条件和容易发生非显然回归的逻辑，而不是内部实现结构。
+- 当功能、行为或契约被删除或改变时，同步删除或更新已经失去意义的测试。
+- 不要让一次性的历史回归测试不断堆积；多个测试保护同一行为时，应合并或保留最有价值的测试。
+- 测试数量不是目标。测试应随着有效行为存在，也应随着过时行为一起消失。
 
-If it does not, it probably should not be in the diff.
+## 7. 资源感知执行
 
-## 5. Goal-Driven Execution
+**谨慎使用本地开发资源。**
 
-**Define success criteria. Loop until verified.**
-
-Transform tasks into concrete, verifiable goals.
-
-Examples:
-- "Add validation" → "Define the invalid inputs, add tests for them, then make those tests pass."
-- "Fix the bug" → "Reproduce the bug, fix it, then verify the reproduction no longer fails."
-- "Refactor X" → "Verify behavior before and after the refactor remains equivalent."
-- "Improve performance" → "Establish a baseline, change one relevant thing, then compare measurements."
-
-For multi-step tasks, use a brief plan when useful:
-
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-
-Verification should match the scope of the change:
-- Start with the smallest relevant test, check, build, or reproduction.
-- Expand verification only when needed.
-- Do not fix unrelated failures encountered during verification.
-- Do not declare success without performing the relevant verification when it is available.
-
-Strong success criteria allow independent iteration. Weak criteria such as "make it work" encourage unnecessary changes and hidden assumptions.
-
-## 6. Resource-Aware Execution
-
-**Do not overload the local machine while building, testing, or running development tasks.**
-
-- Do not run multiple resource-intensive commands in parallel by default.
-- Prefer sequential execution for builds, tests, benchmarks, dependency installation, and other potentially expensive jobs.
-- Before starting concurrent jobs, consider their combined CPU, memory, disk I/O, GPU, and process usage.
-- Only run expensive jobs concurrently when you are confident they will not cause OOM, severe swapping, system freezes, excessive thermal load, or otherwise make the machine unusable.
-- Prefer the smallest relevant command first: run targeted tests, builds, benchmarks, or checks before expanding to the entire project.
-- Do not repeatedly run expensive full-project commands when a narrower verification is sufficient.
-- Avoid leaving unnecessary background processes running after they are no longer needed.
-- Stop or clean up processes started during the task when they are no longer required.
-
-When uncertain, choose the safer and less resource-intensive execution strategy over faster parallel execution.
-
----
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+- 优先运行针对性的测试、构建和检查，再考虑全项目操作。
+- 除非确认资源足够，否则不要并行运行多个高消耗任务。
+- 避免重复执行不必要的重型命令，也不要留下无用的后台进程。
+- 不确定时，优先选择串行、低资源占用的执行方式。
