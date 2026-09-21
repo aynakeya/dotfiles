@@ -4,6 +4,7 @@ const WORKING_UPDATE_INTERVAL_MS = 1000;
 
 export default function modelMetricsExtension(pi: ExtensionAPI) {
 	let agentStartedAt = 0;
+	let awaitingTurnRequest = false;
 	let timing: { requestStartedAt: number; firstOutputAt?: number } | undefined;
 	let ttftMs: number | undefined;
 	let decodingTokensPerSecond = 0;
@@ -12,6 +13,7 @@ export default function modelMetricsExtension(pi: ExtensionAPI) {
 	let workingTimer: ReturnType<typeof setInterval> | undefined;
 
 	const restoreWorkingMessage = (ctx: ExtensionContext): void => {
+		awaitingTurnRequest = false;
 		clearInterval(workingTimer);
 		workingTimer = undefined;
 		ctx.ui.setWorkingMessage();
@@ -57,7 +59,14 @@ export default function modelMetricsExtension(pi: ExtensionAPI) {
 		workingTimer = setInterval(() => updateWorkingMessage(ctx), WORKING_UPDATE_INTERVAL_MS);
 	});
 
+	pi.on("turn_start", (_event, ctx) => {
+		awaitingTurnRequest = ctx.mode === "tui";
+	});
+
 	pi.on("before_provider_request", () => {
+		// Cache warming reuses this hook but does not start a new agent turn.
+		if (!awaitingTurnRequest) return;
+		awaitingTurnRequest = false;
 		timing = { requestStartedAt: performance.now() };
 		liveOutputTokens = 0;
 	});
