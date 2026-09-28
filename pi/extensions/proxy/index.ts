@@ -19,7 +19,9 @@ export default function proxyExtension(pi: ExtensionAPI): void {
 		}).getHttpIdleTimeoutMs();
 		await runtime?.stop();
 		runtime = startTransport(router, timeout);
-		ctx.ui.setStatus("proxy", `proxy:${runtime.config.mode}`);
+		const { mode } = router.config;
+		ctx.ui.setStatus("proxy", ctx.ui.theme.fg("muted", "proxy:")
+			+ ctx.ui.theme.fg(mode === "global" ? "warning" : mode === "rule" ? "accent" : "muted", mode));
 	}
 	pi.on("session_start", async (_event, ctx) => {
 		await activate(loadRouter(path), ctx);
