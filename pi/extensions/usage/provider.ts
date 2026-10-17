@@ -13,9 +13,9 @@ export interface UsageProvider {
 	query(token: string, signal: AbortSignal): Promise<UsageItem[]>;
 }
 
-export async function getJson(url: string, token: string, signal: AbortSignal): Promise<unknown> {
+export async function getJson(url: string, token: string, signal: AbortSignal, headers: Record<string, string> = {}): Promise<unknown> {
 	const response = await fetch(url, {
-		headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal,
+		headers: { ...headers, Authorization: `Bearer ${token}`, Accept: "application/json" }, signal,
 	});
 	if (!response.ok) throw new Error(`Usage request failed: HTTP ${response.status}`);
 	return response.json();

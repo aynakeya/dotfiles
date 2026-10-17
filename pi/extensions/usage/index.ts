@@ -3,9 +3,10 @@ import { Text } from "@earendil-works/pi-tui";
 import type { UsageItem, UsageProvider } from "./provider.ts";
 import deepseek from "./providers/deepseek.ts";
 import kimi from "./providers/kimi.ts";
+import grok from "./providers/grok.ts";
 import { formatDetails, formatStatus } from "./ui.ts";
 
-const PROVIDERS: UsageProvider[] = [deepseek, kimi];
+const PROVIDERS: UsageProvider[] = [deepseek, kimi, grok];
 const USAGE = `Usage: /usage ${PROVIDERS.map((provider) => provider.id).join(" | ")}`;
 interface Result { items: UsageItem[]; error?: string }
 interface Report { provider: string; result: Result }
