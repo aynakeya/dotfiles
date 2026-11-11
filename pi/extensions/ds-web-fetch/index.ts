@@ -81,10 +81,6 @@ export default function dsWebFetch(pi: ExtensionAPI): void {
 		outputSchema: SearchResponse,
 		annotations: { readOnlyHint: true, openWorldHint: true },
 		async execute(_id, params, signal, _onUpdate, ctx) {
-			// TypeBox counts graphemes; the API limit counts Unicode code points.
-			for (const text of [params.query, params.ori_question]) {
-				if (text != null && [...text].length > 128) throw new Error("Search query and original question must not exceed 128 Unicode characters.");
-			}
 			const data = await request("search", params, SearchResponse, signal, ctx);
 			const text = data.results.map((page, i) => [
 				`${i + 1}. ${page.title}`, page.url, page.date ? `Published: ${page.date}` : "",
@@ -105,8 +101,8 @@ export default function dsWebFetch(pi: ExtensionAPI): void {
 		annotations: { readOnlyHint: true, openWorldHint: true },
 		async execute(_id, params, signal, _onUpdate, ctx) {
 			const url = new URL(params.url);
-			if (url.username || url.password || [...params.url].length > 8192) {
-				throw new Error("URL must contain no credentials and be at most 8192 Unicode characters.");
+			if (url.username || url.password) {
+				throw new Error("URL must contain no credentials.");
 			}
 			const data = await request("fetch", params, FetchResponse, signal, ctx);
 			return result(data, `${data.title}\n${params.url}\n\n${data.content}`);
